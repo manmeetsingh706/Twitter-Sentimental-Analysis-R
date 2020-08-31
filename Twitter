@@ -1,0 +1,144 @@
+library(e1071)
+library(twitteR)
+library(plyr)
+library(stringr)
+library(ggplot2)
+library(ROAuth)
+library(NLP)
+library(tm)
+library(caret)
+library(gmodels)
+library(SnowballC)
+consumer_key<-' '  ##Add key
+consumer_secret<-' ' ##Add key
+access_token<-' ' ##Add key
+access_secret<-' ' ##Add key
+setup_twitter_oauth(consumer_key,consumer_secret,access_token,access_secret)
+posText<-read.delim("positive_words.txt",header = FALSE, stringsAsFactors = FALSE)
+posText<-unlist(lapply(posText,function(x){strsplit(x, "\n")}))
+negText<-read.delim("negative_words.txt",header = FALSE, stringsAsFactors = FALSE)
+negText<-unlist(lapply(negText,function(x){strsplit(x, "\n")}))
+pos.words<-scan("positive_words.txt",what = 'character',comment.char = ';')
+neg.words<-scan("negative_words.txt",what = 'character',comment.char = ';')
+tweets_z<-searchTwitter(" ",n=1000,lang ="en")  ##Add Keyword
+key_tweets<-twListToDF(tweets_z)
+View(key_tweets)
+key_text<-key_tweets$text		
+key_text<-tolower(key_text)
+key_text<-gsub("^rt","",key_text)	
+key_text<-gsub("@\\w+","",key_text)	
+key_text<-gsub("[[:punct:]]","",key_text)		
+key_text<-gsub("http\\w+","",key_text)		
+key_text<-gsub("[ |\t]{2,}","",key_text)	
+key_text<-gsub("^ ","",key_text)		
+key_text<-gsub(" $","",key_text)	
+score.sentiment <- function(key_text, pos.words, neg.words, .progress='none')
+{
+scores <- laply(key_text,
+                function(key_text, pos.words, neg.words)
+                {
+	
+                  key_text <- gsub("[[:punct:]]", "", key_text)
+                 
+                  key_text <- gsub("[[:cntrl:]]", "", key_text)
+                 
+                  key_text <- gsub('\\d+', '', key_text)
+                  
+                  
+                  key_text <- tolower(key_text)
+
+
+                  word.list <- str_split(key_text, "\\s+")
+                  words <- unlist(word.list)
+                 
+                  pos.matches <- match(words, pos.words)
+                  neg.matches <- match(words, neg.words)
+         
+                  pos.matches <- !is.na(pos.matches)
+                  neg.matches <- !is.na(neg.matches)
+                  
+                  score <- sum(pos.matches) - sum(neg.matches)
+                  return(score)
+                }, pos.words, neg.words, .progress=.progress )
+  scores.df <- data.frame(text=key_text, score=scores)
+  return(scores.df)
+}
+scores_twitter <- score.sentiment(key_text, pos.words, neg.words, .progress='text')
+View(scores_twitter)
+summary(scores_twitter)
+scores_twitter$score_chr <- as.character(scores_twitter$score)
+scores_twitter$score_chr <- gsub("^0$", "Neutral", scores_twitter$score_chr)
+scores_twitter$score_chr <- gsub("^1$|^2$|^3$|^4$", "Positive", scores_twitter$score_chr)
+scores_twitter$score_chr <- gsub("^-1$|^-2$|^-3$|^-4$", "Negative", scores_twitter$score_chr)
+View(scores_twitter)
+scores_twitter$score_chr <- as.factor(scores_twitter$score_chr)
+key_plot <- ggplot(scores_twitter, aes(x=score_chr))+geom_bar()
+key_plot
+str(key_tweets)
+Sentiments_nb <- ifelse(key_text < 0, "Negative",  "Positive")
+class(Sentiments_nb)
+tweets_raw<-factor(Sentiments_nb)
+str(tweets_raw)
+table(tweets_raw)
+tweets<-key_tweets$text
+View(tweets)
+tweets<-gsub("@\\w+","",tweets)
+tweets<-gsub("[^\x01-\x7F]","",tweets)
+tweets<-gsub("http\\w+","",tweets)
+tweets<-gsub("[0-9]","",tweets)
+tweets<-gsub("[ |\t]{2,}","",tweets)
+tweets<-gsub("[\r\n]","",tweets)
+tweets_corpus<-VCorpus(VectorSource(tweets))
+print(tweets_corpus)
+tweets_corpus_clean <-tm_map(tweets_corpus,content_transformer(tolower))
+tweets_corpus_clean <-tm_map(tweets_corpus_clean,removeWords,stopwords())
+tweets_corpus_clean <-tm_map(tweets_corpus_clean,removePunctuation)
+tweets_corpus_clean <-tm_map(tweets_corpus_clean,stemDocument)
+tweets_corpus_clean <-tm_map(tweets_corpus_clean,stripWhitespace)
+tweets_dtm<- DocumentTermMatrix(tweets_corpus_clean)
+tweets_dtm<- DocumentTermMatrix(tweets_corpus_clean)
+tweets_dtm2<-DocumentTermMatrix(tweets_corpus, control=list(
+  tolower = TRUE,
+  removeNumbers = TRUE,
+  stopwords = TRUE,
+  removePunctuation = TRUE,
+  stemming = TRUE
+))
+tweets_dtm
+tweets_dtm2
+tweets_dtm_train <- tweets_dtm[1:750, ]
+tweets_dtm_test <- tweets_dtm[751:1000, ]
+tweets_train_labels <- tweets_raw[1:750]
+tweets_test_labels <- tweets_raw[751:1000]
+prop.table(table(tweets_train_labels))
+prop.table(table(tweets_test_labels))
+positive<-subset(scores_twitter, score_chr == "Positive")
+negative<-subset(scores_twitter, score_chr == "Negative")
+findFreqTerms(tweets_dtm_train,5)
+tweets_freq_words <- findFreqTerms(tweets_dtm_train,5)
+str(tweets_freq_words)
+tweets_dtm_freq_train<-tweets_dtm_train[ ,tweets_freq_words]
+tweets_dtm_freq_test<- tweets_dtm_test[ ,tweets_freq_words]
+findFreqTerms(tweets_dtm_train,5)
+tweets_freq_words <- findFreqTerms(tweets_dtm_train,5)
+str(tweets_freq_words)
+tweets_dtm_freq_train<-tweets_dtm_train[ ,tweets_freq_words]
+tweets_dtm_freq_test<- tweets_dtm_test[ ,tweets_freq_words]
+convert_counts<-function(x){
+  x<- ifelse(x>0,"Yes","No")
+}
+tweets_train <-apply(tweets_dtm_freq_train, MARGIN=2,convert_counts)
+tweets_test <-apply(tweets_dtm_freq_test, MARGIN=2,convert_counts)
+tweets_classifier<- naiveBayes(tweets_train,tweets_train_labels)
+tweets_test_pred<- predict(tweets_classifier,tweets_test)
+CrossTable(tweets_test_pred,tweets_test_labels,
+prop.chisq= FALSE,prop.t=FALSE,
+dnn = c('predicted','actual'))
+tweets_classifier2<- naiveBayes(tweets_train,tweets_train_labels,laplace = 1)
+tweets_test_pred2<- predict(tweets_classifier2,tweets_test)
+CrossTable(tweets_test_pred2,tweets_test_labels,prop.chisq= FALSE,prop.t=FALSE,
+dnn = c('predicted','actual'))
+matrix_con<-confusionMatrix(tweets_test_pred,tweets_test_labels)
+matrix_con
+matrix_con_1<-confusionMatrix(tweets_test_pred2,tweets_test_labels)
+matrix_con_1
